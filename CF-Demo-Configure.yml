@@ -1,0 +1,213 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: this a stack for create a vpc with public and private ip
+ 
+
+Metadata:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - 
+        Label: 
+          default: "VPC CIDR"
+        Parameters: 
+          - VpcCIDR
+      - 
+        Label: 
+          default: "Subnet CIDR"
+        Parameters:
+          - PublicSubnetCIDR
+          - PrivateSubnetCIDR
+  
+
+Parameters:
+  VpcCIDR: 
+    Default: 10.0.0.0/16
+    Description: This is for vpc CIDR
+    Type: String
+  PublicSubnetCIDR: 
+    Default: 10.0.0.0/24
+    Description: This is for public subnet CIDR
+    Type: String  
+  PrivateSubnetCIDR: 
+    Default: 10.0.1.0/24
+    Description: This is for public subnet CIDR
+    Type: String 
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.  
+ 
+
+Resources:
+  # Create VPC
+  VPC2:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: vpc2
+  # Create Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: IgwVpc2   
+  # Attach Internet Gateway to VPC
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC2                   
+  # Create Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet
+      VpcId: !Ref VPC2
+  # Create Private Subnet
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnetCIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet
+      VpcId: !Ref VPC2
+  # Create Public Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+      VpcId: !Ref VPC2 
+  # Create Public Route Table
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: PrivareRouteTable
+      VpcId: !Ref VPC2             
+  # Add a rule to Public Route Table to access IGW
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+  # Associate Public Subnet with Public Route Table
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+  # Associate Private Subnet with Private Route Table
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+  # public security group
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable ssh http
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0    
+      Tags:
+        - Key: Name
+          Value: public Security Group
+      VpcId: !Ref VPC2    
+  # Private security group
+  PrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable ssh http
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0    
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/16  
+      Tags:
+        - Key: Name
+          Value: private Security Group
+      VpcId: !Ref VPC2
+  # Ec2 instance laungh in public subnet
+  WebServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: us-east-1a
+      ImageId: ami-06ca3ca175f37dd66
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: 
+        - !Ref PublicSecurityGroup
+      UserData: 
+        Fn::Base64: |
+          #!/bin/bash 
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Hello World from $(hostname -f)</h1>" > /var/www/html/index.html 
+      Tags:
+        - Key: Name
+          Value: Webserver
+   # an elastic IP for our instance
+  MyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref WebServer
+  # add Ec2 in Private subnet
+  DBserver:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: us-east-1a
+      ImageId: ami-06ca3ca175f37dd66
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds: 
+        - !Ref PrivateSecurityGroup
+      Tags:
+        - Key: Name
+          Value: DBserver                
+
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC2
+  AppURL:
+    Description: Webserver URL
+    Value: !Sub 'http://${WebServer.PublicDnsName}/index.html' 
+ 
